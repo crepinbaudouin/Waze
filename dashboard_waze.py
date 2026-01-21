@@ -8,6 +8,7 @@ import logging
 from fpdf import FPDF
 from fpdf.enums import XPos, YPos
 import plotly.graph_objects as go
+from pathlib import Path
 
 # Suppress FPDF logging
 logging.getLogger('fpdf').setLevel(logging.ERROR)
@@ -64,24 +65,77 @@ FILES = {
 # =============================
 @st.cache_data
 def load_data():
+    """
+    Charge les CSV listés dans FILES en résolvant les chemins par rapport
+    au dossier contenant ce fichier Python (robuste quel que soit le cwd).
+    Si certains fichiers sont manquants, on affiche un warning et on propose
+    un upload via l'UI.
+    """
+    base_dir = Path(__file__).resolve().parent
     dfs = []
-    for file, scenario in FILES.items():
-        df = pd.read_csv(file, low_memory=False)
+    missing = []
+
+    for file_name, scenario in FILES.items():
+        path = base_dir / file_name
+        if not path.exists():
+            missing.append(file_name)
+            continue
+        try:
+            df = pd.read_csv(path, low_memory=False)
+        except Exception as e:
+            st.error(f"Erreur lecture {file_name}: {e}")
+            raise
         df["scenario"] = scenario
         df["City"] = df["City"].fillna("Inconnue")
         df["Date"] = pd.to_datetime(df["Date"], errors="coerce", dayfirst=True)
         dfs.append(df)
+
+    if missing:
+        st.warning(f"Fichiers absents dans {base_dir}: {', '.join(missing)}")
+
+    if not dfs:
+        st.error("Aucun fichier Waze trouvé dans le dossier du script.")
+        uploaded = st.file_uploader(
+            "Uploader un ou plusieurs fichiers CSV (fallback)",
+            accept_multiple_files=True,
+            type=["csv"]
+        )
+        if uploaded:
+            for f in uploaded:
+                try:
+                    df = pd.read_csv(f, low_memory=False)
+                except Exception as e:
+                    st.error(f"Impossible de lire {f.name}: {e}")
+                    raise
+                scenario = FILES.get(f.name, "Upload")
+                df["scenario"] = scenario
+                if "City" in df.columns:
+                    df["City"] = df["City"].fillna("Inconnue")
+                else:
+                    df["City"] = "Inconnue"
+                if "Date" in df.columns:
+                    df["Date"] = pd.to_datetime(df["Date"], errors="coerce", dayfirst=True)
+                else:
+                    df["Date"] = pd.NaT
+                dfs.append(df)
+
+            if not dfs:
+                raise FileNotFoundError("Aucun CSV valide uploadé.")
+        else:
+            raise FileNotFoundError(
+                f"Aucun des fichiers attendus ({', '.join(FILES.keys())}) "
+                f"n'a été trouvé dans le dossier {base_dir}. "
+                "Placez les fichiers dans ce dossier ou uploadez-les via l'interface."
+            )
+
+    # Concaténation et filtrage final
     waze = pd.concat(dfs, ignore_index=True)
-    waze_filtered = waze[waze["City"].isin(VILLES_SERVICE_COMMUN)]
-    # Add gravité column
+    waze_filtered = waze[waze["City"].isin(VILLES_SERVICE_COMMUN)].copy()
     waze_filtered["gravite"] = waze_filtered["scenario"].map(GRAVITE)
     return waze_filtered
 
 waze = load_data()
 
-# =============================
-# FONCTION D'EXPORT PDF
-# =============================
 # =============================
 # FONCTION D'EXPORT PDF
 # =============================
@@ -169,8 +223,7 @@ def _generate_pdf_report(ville, df):
         
         pdf.ln(5)
         
-        # ===== SECTION 3: TOP RUES =====
-        pdf.set_fill_color(*color_light)
+        # ===== SECTION 3: TOP RUES =====n        pdf.set_fill_color(*color_light)
         pdf.set_font("helvetica", "B", 12)
         pdf.cell(0, 10, "3. TOP 10 RUES LES PLUS ACTIVES", new_x=XPos.LMARGIN, new_y=YPos.NEXT, fill=True)
         pdf.ln(2)
@@ -334,7 +387,10 @@ st.sidebar.download_button(
 col_logo_left, col_title, col_logo_right = st.columns([1, 3, 1])
 
 with col_logo_left:
-    st.image("logo paris saclay.png", width=120)
+    try:
+        st.image("logo paris saclay.png", width=120)
+    except:
+        pass
 
 with col_title:
     st.title("📄 Rapport d'Activité Waze")
