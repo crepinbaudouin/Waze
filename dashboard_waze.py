@@ -1,3 +1,5 @@
+import re
+import os
 import folium
 from streamlit_folium import st_folium
 import streamlit as st
@@ -72,17 +74,61 @@ FILES = {
     "HAZARD_WEATHER_FLOOD.csv": "Inondation"
 }
 
+# --- Helper: extraire latitude/longitude depuis la colonne Location (WKT POINT lon lat) ---
+def _parse_location_column(df, location_col="Location"):
+    """
+    Remplit df['latitude'] et df['longitude'] à partir de la colonne Location
+    qui contient des valeurs du type: Point(2.287962 48.73947)
+    Retourne le DataFrame modifié.
+    """
+    if location_col not in df.columns:
+        return df
+
+    def _extract_lat_lon(val):
+        if pd.isna(val):
+            return (None, None)
+        s = str(val)
+        # Cherche WKT POINT(lon lat) (lon puis lat)
+        m = re.search(r"POINT\s*\(\s*([-+]?\d*\.?\d+)[\s,]+([-+]?\d*\.?\d+)\s*\)", s, re.IGNORECASE)
+        if m:
+            try:
+                lon = float(m.group(1))
+                lat = float(m.group(2))
+                return (lat, lon)
+            except Exception:
+                return (None, None)
+        # fallback: tente "lat,lon" ou "lon,lat"
+        m2 = re.search(r"([-+]?\d*\.?\d+)[\s,;]+([-+]?\d*\.?\d+)", s)
+        if m2:
+            a = float(m2.group(1)); b = float(m2.group(2))
+            # heuristique: si une coordonnée est dans l'intervalle typique de latitudes FR (~41..51)
+            if 40 <= a <= 60:
+                return (a, b)
+            if 40 <= b <= 60:
+                return (b, a)
+            # sinon on retourne a as lat
+            return (a, b)
+        return (None, None)
+
+    lats = []
+    lons = []
+    for v in df[location_col]:
+        lat, lon = _extract_lat_lon(v)
+        lats.append(lat)
+        lons.append(lon)
+
+    df = df.copy()
+    df["latitude"] = pd.to_numeric(pd.Series(lats), errors="coerce")
+    df["longitude"] = pd.to_numeric(pd.Series(lons), errors="coerce")
+    return df
+
+
 # =============================
 # CHARGEMENT DES DONNÉES
 # =============================
+# --- Remplacez la partie de load_data où vous lisez chaque CSV par ceci ---
 @st.cache_data
 def load_data():
-    """
-    Charge les CSV listés dans FILES en résolvant les chemins par rapport
-    au dossier contenant ce fichier Python (robuste quel que soit le cwd).
-    Si certains fichiers sont manquants, on affiche un warning et on propose
-    un upload via l'UI.
-    """
     base_dir = Path(__file__).resolve().parent
     dfs = []
     missing = []
@@ -97,15 +143,35 @@ def load_data():
         except Exception as e:
             st.error(f"Erreur lecture {file_name}: {e}")
             raise
+
+        # Normalisation colonnes attendues
+        # Certains fichiers ont 'City' vide : on remplit par 'Inconnue'
+        if "City" not in df.columns:
+            df["City"] = "Inconnue"
+        else:
+            df["City"] = df["City"].fillna("Inconnue")
+
+        # S'assurer que Street et Date existent
+        if "Street" not in df.columns:
+            df["Street"] = ""
+        if "Date" in df.columns:
+            df["Date"] = pd.to_datetime(df["Date"], errors="coerce", dayfirst=True)
+        else:
+            df["Date"] = pd.NaT
+
+        # Extraire latitude/longitude depuis 'Location' (si présent)
+        df = _parse_location_column(df, location_col="Location")
+
+        # Ajout du scenario (issu du nom du fichier)
         df["scenario"] = scenario
-        df["City"] = df["City"].fillna("Inconnue")
-        df["Date"] = pd.to_datetime(df["Date"], errors="coerce", dayfirst=True)
+
         dfs.append(df)
 
     if missing:
         st.warning(f"Fichiers absents dans {base_dir}: {', '.join(missing)}")
 
     if not dfs:
+        # fallback upload via UI (inchangé - conserve votre logique existante)
         st.error("Aucun fichier Waze trouvé dans le dossier du script.")
         uploaded = st.file_uploader(
             "Uploader un ou plusieurs fichiers CSV (fallback)",
@@ -119,18 +185,20 @@ def load_data():
                 except Exception as e:
                     st.error(f"Impossible de lire {f.name}: {e}")
                     raise
-                scenario = FILES.get(f.name, "Upload")
-                df["scenario"] = scenario
-                if "City" in df.columns:
-                    df["City"] = df["City"].fillna("Inconnue")
-                else:
+                if "City" not in df.columns:
                     df["City"] = "Inconnue"
+                else:
+                    df["City"] = df["City"].fillna("Inconnue")
+                if "Street" not in df.columns:
+                    df["Street"] = ""
                 if "Date" in df.columns:
                     df["Date"] = pd.to_datetime(df["Date"], errors="coerce", dayfirst=True)
                 else:
                     df["Date"] = pd.NaT
+                df = _parse_location_column(df, location_col="Location")
+                scenario = FILES.get(f.name, "Upload")
+                df["scenario"] = scenario
                 dfs.append(df)
-
             if not dfs:
                 raise FileNotFoundError("Aucun CSV valide uploadé.")
         else:
@@ -142,42 +210,81 @@ def load_data():
 
     # Concaténation et filtrage final
     waze = pd.concat(dfs, ignore_index=True)
+
+    # Si la colonne 'City' existe avec valeurs vides après concat, on normalise
+    if "City" in waze.columns:
+        waze["City"] = waze["City"].fillna("Inconnue")
+    else:
+        waze["City"] = "Inconnue"
+
     waze_filtered = waze[waze["City"].isin(VILLES_SERVICE_COMMUN)].copy()
-    waze_filtered["gravite"] = waze_filtered["scenario"].map(GRAVITE)
+    # map gravité en tenant compte des scénarios absents
+    waze_filtered["gravite"] = waze_filtered["scenario"].map(GRAVITE).fillna(1).astype(int)
     return waze_filtered
 
 waze = load_data()
 
+# --- Remplacez generate_waze_map par cette version robuste (utilise les colonnes créées ci‑dessus) ---
 def generate_waze_map(df):
-    m = folium.Map(
-        location=[48.7, 2.25],
-        zoom_start=11,
-        tiles="CartoDB positron"
-    )
+    # Afficher colonnes utiles pour debug (décommentez si besoin)
+    # st.write("Colonnes disponibles (carte):", list(df.columns))
+
+    # On travaille sur une copie
+    df = df.copy()
+
+    # Si latitude/longitude absentes, informer et retourner une carte vide
+    if "latitude" not in df.columns or "longitude" not in df.columns:
+        st.warning("Aucune colonne latitude/longitude détectée — la carte ne peut pas être affichée.")
+        return folium.Map(location=[48.7, 2.25], zoom_start=11, tiles="CartoDB positron")
+
+    # Filtrer les lignes avec coordonnées valides
+    df = df.dropna(subset=["latitude", "longitude"])
+    if df.empty:
+        st.info("Aucun point géolocalisé à afficher pour la sélection.")
+        return folium.Map(location=[48.7, 2.25], zoom_start=11, tiles="CartoDB positron")
+
+    # Créer la carte centrée sur la moyenne des points
+    try:
+        center = [df["latitude"].astype(float).mean(), df["longitude"].astype(float).mean()]
+    except Exception:
+        center = [48.7, 2.25]
+
+    m = folium.Map(location=center, zoom_start=11, tiles="CartoDB positron")
 
     for _, row in df.iterrows():
-        if pd.notna(row["latitude"]) and pd.notna(row["longitude"]):
+        lat = row.get("latitude")
+        lon = row.get("longitude")
+        if pd.isna(lat) or pd.isna(lon):
+            continue
+        try:
+            lat = float(lat); lon = float(lon)
+        except Exception:
+            continue
 
-            icon_path = ICONES.get(row["scenario"])
+        # Icone: utilisez URL si fourni dans ICONES, sinon icone par défaut
+        icon_path = ICONES.get(row.get("scenario", ""), None)
+        icon = None
+        if icon_path:
+            try:
+                if isinstance(icon_path, str) and icon_path.startswith(("http://", "https://")):
+                    icon = folium.CustomIcon(icon_image=icon_path, icon_size=(28, 28))
+                elif os.path.exists(icon_path):
+                    icon = folium.CustomIcon(icon_path, icon_size=(28, 28))
+            except Exception:
+                icon = None
+        if icon is None:
+            icon = folium.Icon(icon="info-sign")
 
-            if icon_path and os.path.exists(icon_path):
-                icon = folium.CustomIcon(icon_path, icon_size=(28, 28))
-            else:
-                icon = folium.Icon(icon="info-sign")
+        popup_html = "<div>"
+        popup_html += f"<b>Scénario :</b> {row.get('scenario','')}<br>"
+        popup_html += f"<b>Ville :</b> {row.get('City','')}<br>"
+        popup_html += f"<b>Rue :</b> {row.get('Street','')}<br>"
+        popup_html += f"<b>Date :</b> {row.get('Date','')}"
+        popup_html += "</div>"
 
-            folium.Marker(
-                location=[row["latitude"], row["longitude"]],
-                icon=icon,
-                popup=f"""
-                <b>Scénario :</b> {row['scenario']}<br>
-                <b>Ville :</b> {row['City']}<br>
-                <b>Rue :</b> {row['Street']}<br>
-                <b>Date :</b> {row['Date']}
-                """
-            ).add_to(m)
+        folium.Marker(location=[lat, lon], icon=icon, popup=popup_html).add_to(m)
 
     return m
-
 
 # =============================
 # FONCTION D'EXPORT PDF
