@@ -1,3 +1,5 @@
+import folium
+from streamlit-folium import st_folium
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -13,6 +15,16 @@ from pathlib import Path
 # Suppress FPDF logging
 logging.getLogger('fpdf').setLevel(logging.ERROR)
 logging.getLogger().setLevel(logging.ERROR)
+
+ICONES = {
+    "Trafic dense": "https://img.icons8.com/color/48/traffic-jam.png",
+    "Trafic à l’arrêt": "https://img.icons8.com/color/24/traffic-jam.png",
+    "Accident léger": "https://img.icons8.com/color/48/car-crash.png",
+    "Accident grave": "https://img.icons8.com/color/48/car-accident.png",
+    "Nid-de-poule": "https://img.icons8.com/color/48/road-worker.png",
+    "Panne de feu tricolore": "https://img.icons8.com/color/48/traffic-light.png",
+    "Inondation": "https://img.icons8.com/color/48/floods.png"
+}
 
 # =============================
 # GRAVITÉ DES SCÉNARIOS
@@ -135,6 +147,37 @@ def load_data():
     return waze_filtered
 
 waze = load_data()
+
+def generate_waze_map(df):
+    m = folium.Map(
+        location=[48.7, 2.25],
+        zoom_start=11,
+        tiles="CartoDB positron"
+    )
+
+    for _, row in df.iterrows():
+        if pd.notna(row["latitude"]) and pd.notna(row["longitude"]):
+
+            icon_path = ICONES.get(row["scenario"])
+
+            if icon_path and os.path.exists(icon_path):
+                icon = folium.CustomIcon(icon_path, icon_size=(28, 28))
+            else:
+                icon = folium.Icon(icon="info-sign")
+
+            folium.Marker(
+                location=[row["latitude"], row["longitude"]],
+                icon=icon,
+                popup=f"""
+                <b>Scénario :</b> {row['scenario']}<br>
+                <b>Ville :</b> {row['City']}<br>
+                <b>Rue :</b> {row['Street']}<br>
+                <b>Date :</b> {row['Date']}
+                """
+            ).add_to(m)
+
+    return m
+
 
 # =============================
 # FONCTION D'EXPORT PDF
@@ -624,17 +667,15 @@ d'orienter les actions de prévention et de gestion du trafic.
 st.divider()
 st.markdown("""
 ### 6️⃣ Carte Interactive Waze
-
-Explorez les incidents sur une carte interactive avec filtres par ville et année.
 """)
 
-# Load and display the interactive map
-try:
-    with open("carte_waze_service_commun.html", "r", encoding="utf-8") as f:
-        map_html = f.read()
-    st.components.v1.html(map_html, height=800)
-except FileNotFoundError:
-    st.warning("📍 La carte interactive n'est pas disponible. Générez-la d'abord avec le notebook WAZE.ipynb")
-
-st.divider()
+if len(df) == 0:
+    st.warning("📍 Aucune donnée à afficher sur la carte.")
+else:
+    waze_map = generate_waze_map(df)
+    st_folium(
+        waze_map,
+        height=800,
+        use_container_width=True
+    )
 st.markdown("<p style='text-align: center; color: #888;'>📊 Rapport généré avec  les données Waze</p>", unsafe_allow_html=True)
