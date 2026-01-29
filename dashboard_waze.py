@@ -773,36 +773,34 @@ d'orienter les actions de prévention et de gestion du trafic.
 
 st.divider()
 st.divider()
-st.markdown("### 6️⃣ Carte Interactive Waze")
+st.markdown("""
+### 6️⃣ Carte Interactive Waze
+""")
 
-# Nouveau filtre scénario (n'agit que sur la carte)
+# ----------------------------
+# FILTRE SCÉNARIO (CARTE SEULEMENT)
+# ----------------------------
 scenarios_disponibles = sorted(df["scenario"].dropna().unique())
-scenario_selection = st.multiselect(
-    "Filtrer les scénarios (n'agit que sur la carte) :",
+
+scenario_carte = st.multiselect(
+    "🎯 Filtrer les scénarios (agit uniquement sur la carte)",
     options=scenarios_disponibles,
     default=scenarios_disponibles,
     key="filtre_scenario_carte"
 )
 
-# Slider pour limiter le nombre de points (perf UI)
-max_points = st.slider(
-    "Nombre maximum de points à afficher sur la carte",
-    min_value=200, max_value=10000, value=2000, step=200,
-    help="Limiter le nombre de points accélère l'affichage."
-)
+# Data utilisée UNIQUEMENT pour la carte
+df_map = df[df["scenario"].isin(scenario_carte)].copy()
 
-# Data utilisée pour TOUT le dashboard (déjà filtrée Ville + Dates)
-# -> df
-
-# Data spécifique à la carte : applique le filtre scénario ici seulement
-df_map = df[df["scenario"].isin(scenario_selection)].copy()
-
-# Échantillonnage si trop volumineux
-if len(df_map) > max_points:
-    df_map = df_map.sample(n=max_points, random_state=42)
-
+# ----------------------------
+# AFFICHAGE CARTE
+# ----------------------------
 if len(df_map) == 0:
-    st.warning("📍 Aucune donnée à afficher sur la carte avec les paramètres choisis.")
+    st.warning("📍 Aucune donnée à afficher sur la carte pour les scénarios sélectionnés.")
 else:
-    waze_map = generate_waze_map(df_map, cluster=True, use_local_icons=True)
-    st_folium(waze_map, height=800, use_container_width=True)
+    waze_map = generate_waze_map(df_map)
+    st_folium(
+        waze_map,
+        height=800,
+        use_container_width=True
+    )
