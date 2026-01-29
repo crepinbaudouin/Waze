@@ -782,7 +782,7 @@ else:
     waze_map = generate_waze_map(df)
     st_folium(
         waze_map,
-        height=600,
+        height=800,
         use_container_width=True
     )
 st.markdown("<p style='text-align: center; color: #888;'>📊 Rapport généré avec  les données Waze</p>", unsafe_allow_html=True)
