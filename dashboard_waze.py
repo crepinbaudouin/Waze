@@ -132,7 +132,7 @@ def _parse_location_column(df, location_col="Location"):
 # =============================
 # CHARGEMENT DES DONNÉES (AVEC CACHE)
 # =============================
-@st.cache_data(ttl=600)
+@st.cache_data(show_spinner=False)
 def load_data():
     base_dir = Path(__file__).resolve().parent
     dfs = []
@@ -407,7 +407,7 @@ def generate_pdf_report(ville, df):
         sys.stdout = old_stdout
         sys.stderr = old_stderr
 
-@st.cache_data
+@st.cache_data(show_spinner=False)
 def get_cached_pdf(ville, date_tuple):
     date_min, date_max = date_tuple
     if isinstance(ville, list):
@@ -425,12 +425,9 @@ def get_cached_pdf(ville, date_tuple):
 st.sidebar.title("Paramètres du rapport")
 
 # 👉 OPTION A — Bouton recharger les données (compatible toutes versions)
-if st.sidebar.button("🔄 Recharger les données"):
+if st.sidebar.button("🔄 Actualiser les données"):
     st.cache_data.clear()
-    if hasattr(st, "rerun"):
-        st.rerun()
-    else:
-        st.experimental_rerun()
+    st.rerun()
 
 ville = st.sidebar.multiselect(
     "Ville(s)",
