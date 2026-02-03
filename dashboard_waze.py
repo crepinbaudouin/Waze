@@ -132,7 +132,7 @@ def _parse_location_column(df, location_col="Location"):
 # =============================
 # CHARGEMENT DES DONNÉES (AVEC CACHE)
 # =============================
-@st.cache_data
+@st.cache_data(ttl=600)
 def load_data():
     base_dir = Path(__file__).resolve().parent
     dfs = []
