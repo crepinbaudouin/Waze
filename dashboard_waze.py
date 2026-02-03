@@ -132,7 +132,7 @@ def _parse_location_column(df, location_col="Location"):
 # =============================
 # CHARGEMENT DES DONNÉES (AVEC CACHE)
 # =============================
-@st.cache_data(show_spinner=False)
+@st.cache_data
 def load_data():
     base_dir = Path(__file__).resolve().parent
     dfs = []
@@ -407,7 +407,7 @@ def generate_pdf_report(ville, df):
         sys.stdout = old_stdout
         sys.stderr = old_stderr
 
-@st.cache_data(show_spinner=False)
+@st.cache_data
 def get_cached_pdf(ville, date_tuple):
     date_min, date_max = date_tuple
     if isinstance(ville, list):
